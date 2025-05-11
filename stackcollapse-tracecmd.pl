@@ -95,9 +95,40 @@ sub summarize_stack_and_cleanup {
 #
 while (defined($_ = <>)) {
 
+	# tracer: nop
+	#
+	# entries-in-buffer/entries-written: 10269/10269   #P:14
+	#
+	#                                _-----=> irqs-off/BH-disabled
+	#                               / _----=> need-resched
+	#                              | / _---=> hardirq/softirq
+	#                              || / _--=> preempt-depth
+	#                              ||| / _-=> migrate-disable
+	#                              |||| /     delay
+	#           TASK-PID     CPU#  |||||  TIMESTAMP  FUNCTION
+	#              | |         |   |||||     |         |
+	next if /^\s*#/;  # Skip comment/legend lines
+
 	# Ftrace raw output
 	# 1287587.105144 |   1)               |  /* mm_page_alloc: page=0000000082b1fe73 pfn=1704824 order=0 migratetype=1 gfp_flags=GFP_HIGHUSER_MOVABLE|__GFP_ZERO */
 	if ($include_page_order || $include_page_type) {
+		# new ftrace format
+		# cursor-6993    [000] ..... 193426.965269: mm_page_alloc: page=000000000307dc12 pfn=0xeaf016 order=0 migratetype=1 gfp_flags=GFP_HIGHUSER_MOVABLE|__GFP_COMP|__GFP_ZERO
+		# byobu-status-296768  [009] ..... 193427.737355: mm_page_alloc: page=00000000c4b7a54e pfn=0x697a34 order=1 migratetype=0 gfp_flags=GFP_KERNEL_ACCOUNT|__GFP_ZERO
+		#     tmux: server-156889  [000] ..... 193427.742347: mm_page_alloc: page=0000000082985bcb pfn=0x286d8b order=0 migratetype=0 gfp_flags=GFP_KERNEL
+		if (/^\s+(.+)\s+\[(\d+)\]\s+.*?mm_page_alloc:.*?order=(\d+)\s+migratetype=(\d+)\s+gfp_flags=([^\s]+)/) {
+			if (defined $pname) {
+				print "summarize_stack_and_cleanup in new ftrace format\n";
+				summarize_stack_and_cleanup();
+			}
+			$pname = $1;
+			$page_alloc_event_cpu = $2;
+			$order = $3;
+			$migrate_type = $4;
+			$gfp_flags = $5;
+			print "pname: $pname, page_alloc_event_cpu: $page_alloc_event_cpu, order: $order, migrate_type: $migrate_type, gfp_flags: $gfp_flags\n";
+			next;
+		}
 		# ftrace raw output
 		if (/^\s+(\d+\.\d+)\s+|\s+(\d+)\).+mm_page_alloc.+order=(\d+)\s+migratetype=(\d+)\s+gfp_flags=(.+)\*/) {
 			if (defined $pname) {
@@ -143,6 +174,28 @@ while (defined($_ = <>)) {
 		next;
 	}
 
+	# new ftrace format:
+	# trace_event_raw_event_mm_page_alloc
+	# __alloc_pages_noprof
+	# alloc_pages_mpol_noprof
+	# folio_alloc_mpol_noprof
+	# vma_alloc_folio_noprof
+	# alloc_anon_folio
+	# do_anonymous_page
+	# handle_pte_fault
+	# __handle_mm_fault
+	# handle_mm_fault
+	# do_user_addr_fault
+	# exc_page_fault
+	# asm_exc_page_fault
+	if (/^([a-zA-Z0-9_\-\.]+)$/) {
+		$func_name = $1;
+		unshift @stack, $func_name if defined $func_name && $func_name ne '';
+		if (scalar(@stack) > 30) {
+			print STDERR "DEBUG: stack size ", scalar(@stack), " at input line $.: [", join(", ", @stack), "]\n";
+			last;
+		}
+	}
 	# trace-cmd output:
 	# => xfs_buf_get_map (ffffffffc065ed5c)
 	# => xfs_buf_read_map (ffffffffc065f98d)
